@@ -1,0 +1,48 @@
+# Python bytecode and test/tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments and local Python configuration
+.venv/
+venv/
+ENV/
+env/
+.python-version.local
+
+# Environment variables and secrets (keep example templates)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Build output and package artifacts
+build/
+dist/
+*.egg-info/
+*.whl
+
+# JavaScript/browser-extension dependencies and generated output
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+extension/dist/
+extension/build/
+
+# IDEs and editors
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.example.json
+
+# Operating system files and logs
+.DS_Store
+Thumbs.db
+*.log
