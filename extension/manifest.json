@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Moodle AI Assistant",
+  "version": "0.1.0",
+  "description": "Read a sample quiz question and analyze it through the local assistant API.",
+  "minimum_chrome_version": "114",
+  "permissions": ["sidePanel"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open Moodle AI Assistant"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1:8765/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

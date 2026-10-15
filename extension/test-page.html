@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local quiz page — extension test fixture</title>
+    <style>
+      :root { color-scheme: light; font: 16px/1.5 "Segoe UI", sans-serif; color: #20312b; }
+      body { max-width: 820px; margin: 36px auto; padding: 0 20px; background: #f4f7f5; }
+      h1 { font-size: 24px; }
+      .notice { border-left: 4px solid #bd8b25; background: #fff8e8; padding: 12px 14px; }
+      .que { margin: 18px 0; border: 1px solid #d6e1db; border-radius: 10px; background: white; padding: 18px; }
+      .qtext { margin-bottom: 12px; font-weight: 650; }
+      .answer label { display: block; margin: 8px 0; cursor: pointer; }
+      textarea { display: block; width: min(100%, 520px); margin-top: 8px; padding: 9px; }
+      .question-type { margin: 0 0 8px; color: #62736b; font-size: 12px; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <h1>Local Moodle-style question fixture</h1>
+    <p class="notice">
+      This page imitates a small subset of common Moodle quiz markup for local testing.
+      It is not copied from Moodle and does not guarantee compatibility with a real site.
+    </p>
+
+    <section class="que multichoice" data-fixture="radio">
+      <p class="question-type">Single choice · radio</p>
+      <div class="qtext">Which planet is known as the Red Planet?</div>
+      <div class="answer">
+        <label><input type="radio" name="q1" value="a"> Venus</label>
+        <label><input type="radio" name="q1" value="b"> Mars</label>
+        <label><input type="radio" name="q1" value="c"> Jupiter</label>
+      </div>
+    </section>
+
+    <section class="que multichoice" data-fixture="checkbox">
+      <p class="question-type">Multiple response · checkbox</p>
+      <div class="qtext">Which of these are programming languages?</div>
+      <div class="answer">
+        <label><input type="checkbox" name="q2" value="a"> Python</label>
+        <label><input type="checkbox" name="q2" value="b"> HTML</label>
+        <label><input type="checkbox" name="q2" value="c"> JavaScript</label>
+      </div>
+    </section>
+
+    <section class="que essay" data-fixture="open">
+      <p class="question-type">Open response · text area</p>
+      <div class="qtext">Briefly explain what an API does.</div>
+      <div class="answer">
+        <label for="q3-response">Your response</label>
+        <textarea id="q3-response" name="q3-response" rows="3"></textarea>
+      </div>
+    </section>
+  </body>
+</html>

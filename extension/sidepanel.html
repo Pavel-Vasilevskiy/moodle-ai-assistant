@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Moodle AI Assistant</title>
+    <link rel="stylesheet" href="sidepanel.css">
+    <script src="sidepanel.js" defer></script>
+  </head>
+  <body>
+    <main class="panel-shell">
+      <header class="panel-header">
+        <div class="brand-mark" aria-hidden="true">M</div>
+        <div>
+          <p class="eyebrow">STUDY COMPANION</p>
+          <h1>Moodle AI Assistant</h1>
+        </div>
+      </header>
+
+      <section class="page-reader" aria-labelledby="page-reader-heading">
+        <h2 id="page-reader-heading">Question source</h2>
+        <button id="read-question-button" class="button button-secondary" type="button">
+          Read question from Moodle
+        </button>
+        <p id="read-status" class="read-status" role="status" aria-live="polite" hidden></p>
+        <div id="question-list" class="question-list" aria-label="Questions found on page" hidden></div>
+      </section>
+
+      <form id="answer-form" novalidate>
+        <label for="question">Question</label>
+        <textarea
+          id="question"
+          name="question"
+          rows="4"
+          maxlength="2000"
+          placeholder="Type or paste your question…"
+          required
+        ></textarea>
+
+        <label for="options">Answer options <span class="optional">Optional</span></label>
+        <textarea
+          id="options"
+          name="options"
+          rows="5"
+          placeholder="Enter one option per line…"
+        ></textarea>
+        <p class="field-hint">Leave this blank for an open-ended question.</p>
+
+        <div class="button-row">
+          <button id="analyze-button" class="button button-primary" type="submit">
+            Analyze
+          </button>
+          <button id="clear-button" class="button button-secondary" type="button">
+            Clear
+          </button>
+        </div>
+      </form>
+
+      <div id="loading-status" class="loading-status" role="status" aria-live="polite" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Analyzing your question…</span>
+      </div>
+      <p id="error-message" class="error-message" role="alert" hidden></p>
+      <p id="ready-message" class="ready-message" role="status">
+        Your question is only sent to the configured assistant backend when you select Analyze.
+      </p>
+
+      <section id="result-section" class="result-section" aria-live="polite" hidden>
+        <div class="section-heading">
+          <span class="result-icon" aria-hidden="true">✦</span>
+          <h2>Analysis</h2>
+        </div>
+
+        <article class="result-card answer-card">
+          <h3>Suggested answer</h3>
+          <p id="suggested-answer"></p>
+        </article>
+
+        <article class="result-card">
+          <h3>Explanation</h3>
+          <p id="explanation"></p>
+        </article>
+
+        <div class="result-meta">
+          <span class="meta-label">Model confidence</span>
+          <span id="confidence" class="confidence-value"></span>
+        </div>
+        <p class="confidence-note">Approximate self-assessment, not a verified probability.</p>
+        <p id="context-notice" class="context-notice" hidden>
+          More context may be needed for a reliable answer.
+        </p>
+      </section>
+
+      <footer class="panel-footer">Review the explanation before using a suggestion.</footer>
+    </main>
+  </body>
+</html>
