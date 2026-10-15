@@ -7,7 +7,8 @@ class AnswerRequest(BaseModel):
     """Question and its available answer options."""
 
     question: str = Field(min_length=1, max_length=2000)
-    options: list[str] = Field(min_length=1, max_length=20)
+    # An empty list supports open-ended questions; existing clients can still send options.
+    options: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("question", mode="before")
     @classmethod
@@ -30,7 +31,22 @@ class AnswerRequest(BaseModel):
 
 
 class AnswerResponse(BaseModel):
-    """Placeholder response while AI integration is not available."""
+    """Structured AI result plus the original response fields for compatibility."""
 
+    suggested_answer: str
+    explanation: str
+    confidence: float = Field(ge=0, le=1)
+    needs_more_context: bool
+
+    # Keep the original response keys so existing clients do not break.
     answer: str
     message: str
+
+
+class AIAnswer(BaseModel):
+    """The structured result requested from the AI provider."""
+
+    suggested_answer: str = Field(max_length=2000)
+    explanation: str = Field(max_length=4000)
+    confidence: float = Field(ge=0, le=1)
+    needs_more_context: bool
