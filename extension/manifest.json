@@ -20,7 +20,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://127.0.0.1:8765/*"],
+      "matches": ["http://127.0.0.1:8765/test-page.html"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

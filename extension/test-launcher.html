@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Moodle popup test</title>
+    <style>
+      :root { color-scheme: light; font: 16px/1.5 "Segoe UI", sans-serif; color: #1c3028; }
+      body { max-width: 650px; margin: 12vh auto; padding: 28px; background: #f4f7f5; }
+      main { border: 1px solid #d8e3dc; border-radius: 14px; background: #fff; padding: 26px; }
+      h1 { margin-top: 0; font-size: 22px; }
+      p { color: #5d6f66; }
+      button { min-height: 42px; border: 0; border-radius: 9px; background: #16745a; color: #fff; cursor: pointer; font: inherit; font-weight: 650; padding: 0 16px; }
+      button:hover { background: #105943; }
+      #status { min-height: 1.5em; font-size: 13px; }
+    </style>
+    <script src="test-launcher.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Local Moodle popup test</h1>
+      <p>
+        Open the existing Moodle-style fixture in a separate popup window. The popup
+        feature requests a minimal browser frame where the browser permits it.
+      </p>
+      <button id="open-popup" type="button">Open test quiz popup</button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+  </body>
+</html>

@@ -104,7 +104,7 @@ test("manifest defines Side Panel and limits access to backend and local fixture
     "http://127.0.0.1:8765/*",
   ]);
   assert.equal(manifest.background.service_worker, "background.js");
-  assert.deepEqual(manifest.content_scripts[0].matches, ["http://127.0.0.1:8765/*"]);
+  assert.deepEqual(manifest.content_scripts[0].matches, ["http://127.0.0.1:8765/test-page.html"]);
   assert.deepEqual(manifest.content_scripts[0].js, ["content.js"]);
 });
 
