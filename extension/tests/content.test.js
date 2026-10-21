@@ -12,6 +12,8 @@ function element({
   labels = [],
   children = [],
   visible = true,
+  id = "",
+  attributes = {},
 } = {}) {
   const current = {
     tagName: tag.toUpperCase(),
@@ -20,6 +22,8 @@ function element({
     textContent: text,
     type,
     labels,
+    id,
+    getAttribute(name) { return attributes[name] ?? null; },
     children,
     getClientRects: () => visible ? [{}] : [],
     querySelector(selector) {
@@ -74,7 +78,18 @@ function questionBlock(questionText, choices = [], { visible = true, hasQuestion
 
 function page(...questions) {
   const root = element({ children: questions });
-  return { querySelectorAll: (selector) => root.querySelectorAll(selector) };
+  function findById(parent, id) {
+    for (const child of parent.children) {
+      if (child.id === id) return child;
+      const match = findById(child, id);
+      if (match) return match;
+    }
+    return null;
+  }
+  return {
+    querySelectorAll: (selector) => root.querySelectorAll(selector),
+    getElementById: (id) => findById(root, id),
+  };
 }
 
 test("reads a radio question and its visible option labels", () => {
@@ -104,6 +119,29 @@ test("reads checkbox options without reading checked state or values", () => {
   assert.deepEqual(result.questions[0].options, ["First", "Second"]);
   assert.equal("value" in result.questions[0], false);
   assert.equal("checked" in result.questions[0], false);
+});
+
+test("reads Moodle options connected through aria-labelledby instead of label elements", () => {
+  const optionLabels = [
+    element({ id: "answer-label-0", classes: ["d-flex", "w-auto"], text: "First real option" }),
+    element({ id: "answer-label-1", classes: ["d-flex", "w-auto"], text: "Second real option" }),
+  ];
+  const inputs = optionLabels.map((label) => element({
+    tag: "input",
+    type: "radio",
+    attributes: { "aria-labelledby": label.id },
+  }));
+  const block = element({
+    classes: ["que", "multichoice"],
+    children: [
+      element({ classes: ["qtext"], text: "Choose one option." }),
+      element({ classes: ["answer"], children: [...inputs, ...optionLabels] }),
+    ],
+  });
+
+  const result = extractQuestions(page(block));
+
+  assert.deepEqual(result.questions[0].options, ["First real option", "Second real option"]);
 });
 
 test("supports an open text question and never reads the response field", () => {

@@ -7,7 +7,8 @@
   "permissions": ["sidePanel"],
   "host_permissions": [
     "http://127.0.0.1:8000/*",
-    "http://127.0.0.1:8765/*"
+    "http://127.0.0.1:8765/*",
+    "https://distance.kuk.edu.ua/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -20,7 +21,10 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://127.0.0.1:8765/test-page.html"],
+      "matches": [
+        "http://127.0.0.1:8765/test-page.html",
+        "https://distance.kuk.edu.ua/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

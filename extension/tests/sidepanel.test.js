@@ -95,16 +95,20 @@ function jsonResponse(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => payload };
 }
 
-test("manifest defines Side Panel and limits access to backend and local fixture", () => {
+test("manifest defines Side Panel and limits access to the backend, fixture, and exact Moodle host", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.side_panel.default_path, "sidepanel.html");
   assert.deepEqual(manifest.permissions, ["sidePanel"]);
   assert.deepEqual(manifest.host_permissions, [
     "http://127.0.0.1:8000/*",
     "http://127.0.0.1:8765/*",
+    "https://distance.kuk.edu.ua/*",
   ]);
   assert.equal(manifest.background.service_worker, "background.js");
-  assert.deepEqual(manifest.content_scripts[0].matches, ["http://127.0.0.1:8765/test-page.html"]);
+  assert.deepEqual(manifest.content_scripts[0].matches, [
+    "http://127.0.0.1:8765/test-page.html",
+    "https://distance.kuk.edu.ua/*",
+  ]);
   assert.deepEqual(manifest.content_scripts[0].js, ["content.js"]);
 });
 
