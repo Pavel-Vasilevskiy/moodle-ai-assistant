@@ -175,6 +175,11 @@ textarea:focus {
   margin-top: 16px;
 }
 
+.button-fresh {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .button {
   min-height: 39px;
   border: 1px solid transparent;
@@ -254,6 +259,12 @@ textarea:focus {
 
 .result-section {
   margin-top: 22px;
+}
+
+.response-source {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .section-heading {

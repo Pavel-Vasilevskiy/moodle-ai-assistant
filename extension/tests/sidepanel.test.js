@@ -14,6 +14,7 @@ const expectedResult = {
   explanation: "Paris is the capital of France.",
   confidence: 0.92,
   needs_more_context: false,
+  source: "ai",
 };
 
 class Element {
@@ -55,9 +56,9 @@ function harness(
 ) {
   const ids = [
     "answer-form", "question", "options", "read-question-button", "read-status",
-    "question-list", "analyze-button", "clear-button",
+    "question-list", "analyze-button", "fresh-button", "clear-button",
     "loading-status", "error-message", "ready-message", "result-section",
-    "suggested-answer", "explanation", "confidence", "context-notice",
+    "suggested-answer", "explanation", "confidence", "context-notice", "response-source",
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
   elements["loading-status"].hidden = true;
@@ -238,13 +239,42 @@ test("sends the expected JSON and presents a successful API response", async () 
   assert.deepEqual(JSON.parse(request.options.body), {
     question: "What is the capital of France?",
     options: ["Paris", "Rome"],
+    force_refresh: false,
   });
   assert.equal(elements["suggested-answer"].textContent, "Paris");
   assert.equal(elements.explanation.textContent, expectedResult.explanation);
   assert.equal(elements.confidence.textContent, "92%");
+  assert.equal(elements["response-source"].textContent, "Source: fresh AI response");
   assert.equal(elements["result-section"].hidden, false);
   assert.equal(elements["context-notice"].hidden, true);
   assert.equal(elements["error-message"].hidden, true);
+});
+
+test("fresh response button bypasses cache and shows the returned source", async () => {
+  let request;
+  const { elements } = harness(async (_url, options) => {
+    request = options;
+    return jsonResponse({ ...expectedResult, source: "ai" });
+  });
+  elements.question.value = "Question?";
+
+  await elements["fresh-button"].fire("click");
+
+  assert.deepEqual(JSON.parse(request.body), {
+    question: "Question?",
+    options: [],
+    force_refresh: true,
+  });
+  assert.equal(elements["response-source"].textContent, "Source: fresh AI response");
+});
+
+test("normal Analyze displays that the result came from cache", async () => {
+  const { elements } = harness(async () => jsonResponse({ ...expectedResult, source: "cache" }));
+  elements.question.value = "Question?";
+
+  await elements["answer-form"].fire("submit");
+
+  assert.equal(elements["response-source"].textContent, "Source: saved answer cache");
 });
 
 test("rejects an empty question without making a request", async () => {

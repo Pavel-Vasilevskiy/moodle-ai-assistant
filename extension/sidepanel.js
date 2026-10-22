@@ -14,6 +14,7 @@ const readQuestionButton = document.getElementById("read-question-button");
 const readStatus = document.getElementById("read-status");
 const questionList = document.getElementById("question-list");
 const analyzeButton = document.getElementById("analyze-button");
+const freshButton = document.getElementById("fresh-button");
 const clearButton = document.getElementById("clear-button");
 const loadingStatus = document.getElementById("loading-status");
 const errorMessage = document.getElementById("error-message");
@@ -23,6 +24,7 @@ const suggestedAnswer = document.getElementById("suggested-answer");
 const explanation = document.getElementById("explanation");
 const confidence = document.getElementById("confidence");
 const contextNotice = document.getElementById("context-notice");
+const responseSource = document.getElementById("response-source");
 
 let isLoading = false;
 let isReading = false;
@@ -30,6 +32,7 @@ let isReading = false;
 function setLoading(loading) {
   isLoading = loading;
   analyzeButton.disabled = loading;
+  freshButton.disabled = loading;
   clearButton.disabled = loading;
   readQuestionButton.disabled = loading;
   loadingStatus.hidden = !loading;
@@ -40,6 +43,7 @@ function setReading(reading) {
   isReading = reading;
   readQuestionButton.disabled = reading;
   analyzeButton.disabled = reading;
+  freshButton.disabled = reading;
   clearButton.disabled = reading;
 }
 
@@ -159,6 +163,7 @@ async function readQuestionFromPage() {
 
 function clearResult() {
   resultSection.hidden = true;
+  responseSource.textContent = "";
   suggestedAnswer.textContent = "";
   explanation.textContent = "";
   confidence.textContent = "";
@@ -193,7 +198,8 @@ function validateResponse(payload) {
     Number.isFinite(payload.confidence) &&
     payload.confidence >= 0 &&
     payload.confidence <= 1 &&
-    typeof payload.needs_more_context === "boolean"
+    typeof payload.needs_more_context === "boolean" &&
+    (payload.source === undefined || payload.source === "cache" || payload.source === "ai")
   );
 }
 
@@ -218,6 +224,11 @@ async function readJson(response) {
 }
 
 function presentResult(payload) {
+  responseSource.textContent = payload.source === "cache"
+    ? "Source: saved answer cache"
+    : payload.source === "ai"
+      ? "Source: fresh AI response"
+      : "Response source not provided by the backend.";
   suggestedAnswer.textContent = payload.suggested_answer || "No reliable answer was suggested.";
   explanation.textContent = payload.explanation;
   confidence.textContent = `${Math.round(payload.confidence * 100)}%`;
@@ -225,7 +236,7 @@ function presentResult(payload) {
   resultSection.hidden = false;
 }
 
-async function analyze(event) {
+async function analyze(event, forceRefresh = false) {
   event.preventDefault();
   if (isLoading || isReading) return;
 
@@ -262,7 +273,7 @@ async function analyze(event) {
     const response = await fetch(answerEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, options }),
+      body: JSON.stringify({ question, options, force_refresh: forceRefresh }),
     });
     const payload = await readJson(response);
 
@@ -304,4 +315,5 @@ function clearForm() {
 
 readQuestionButton.addEventListener("click", readQuestionFromPage);
 form.addEventListener("submit", analyze);
+freshButton.addEventListener("click", (event) => analyze(event, true));
 clearButton.addEventListener("click", clearForm);

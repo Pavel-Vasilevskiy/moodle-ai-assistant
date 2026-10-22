@@ -103,6 +103,7 @@ test("reads a radio question and its visible option labels", () => {
     question: "Pick one",
     options: ["North", "South"],
     hasChoiceInputs: true,
+    selectionMode: "single",
   });
   assert.equal(result.candidateCount, 1);
 });
@@ -158,6 +159,7 @@ test("supports an open text question and never reads the response field", () => 
     question: "Explain the idea.",
     options: [],
     hasChoiceInputs: false,
+    selectionMode: "open",
   });
 });
 
