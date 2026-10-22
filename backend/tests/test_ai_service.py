@@ -16,16 +16,25 @@ from app.services.ai_service import (
 
 
 class FakeResponses:
-    def __init__(self, parsed: object = None, error: Exception | None = None) -> None:
+    def __init__(self, parsed: object = None, error: Exception | None = None, usage=None) -> None:
         self.parsed = parsed
         self.error = error
+        self.usage = usage
+        self.model = "test-model"
+        self.id = "resp_usage_test"
         self.arguments: dict[str, object] = {}
 
     def parse(self, **kwargs):
         self.arguments = kwargs
         if self.error:
             raise self.error
-        return SimpleNamespace(output_parsed=self.parsed)
+        self.response = SimpleNamespace(
+            output_parsed=self.parsed,
+            usage=self.usage,
+            model=self.model,
+            id=self.id,
+        )
+        return self.response
 
 
 class FakeClient:
@@ -72,6 +81,25 @@ def test_generate_answer_returns_pydantic_model(monkeypatch) -> None:
     assert response.arguments["instructions"] == ai_service.SYSTEM_PROMPT
     assert '"options": ["Варіант А", "Варіант Б"]' in response.arguments["input"]
     assert fake_client.closed
+
+
+def test_generate_answer_passes_real_response_usage_to_store(monkeypatch) -> None:
+    response = FakeResponses(
+        parsed={
+            "suggested_answer": "Варіант А",
+            "explanation": "Пояснення.",
+            "confidence": 0.8,
+            "needs_more_context": False,
+        },
+        usage=SimpleNamespace(input_tokens=120, output_tokens=34, total_tokens=154),
+    )
+    configure_fake_client(monkeypatch, response)
+    saved = []
+    monkeypatch.setattr(ai_service.usage_store, "record_response_usage", lambda value, model: saved.append((value, model)))
+
+    ai_service.generate_answer("Питання?", ["Варіант А"])
+
+    assert saved == [(response.response, "test-model")]
 
 
 def test_generate_answer_rejects_missing_api_key(monkeypatch) -> None:
@@ -164,6 +192,33 @@ def test_generate_answer_rejects_suggestion_not_in_options(monkeypatch) -> None:
 
     with pytest.raises(AIResponseError):
         ai_service.generate_answer("Питання?", ["Варіант А", "Варіант Б"])
+
+
+def test_generate_answer_supplies_known_wrong_option_to_model(monkeypatch) -> None:
+    response = FakeResponses(parsed={
+        "suggested_answer": "Безпечний варіант",
+        "explanation": "Пояснення.",
+        "confidence": 0.7,
+        "needs_more_context": False,
+    })
+    configure_fake_client(monkeypatch, response)
+
+    ai_service.generate_answer("Питання?", ["Неправильний", "Безпечний варіант"], ["Неправильний"])
+
+    assert '"known_wrong_options": ["Неправильний"]' in response.arguments["input"]
+    assert "Never suggest them" in response.arguments["instructions"]
+
+
+def test_generate_answer_rejects_model_suggestion_marked_known_wrong(monkeypatch) -> None:
+    configure_fake_client(monkeypatch, FakeResponses(parsed={
+        "suggested_answer": "Неправильний",
+        "explanation": "Пояснення.",
+        "confidence": 0.7,
+        "needs_more_context": False,
+    }))
+
+    with pytest.raises(AIResponseError):
+        ai_service.generate_answer("Питання?", ["Неправильний", "Безпечний"], ["Неправильний"])
 
 
 def test_generate_answer_maps_unknown_model_to_configuration_error(monkeypatch) -> None:

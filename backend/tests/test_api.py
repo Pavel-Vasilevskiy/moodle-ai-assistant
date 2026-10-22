@@ -1,15 +1,18 @@
 """HTTP-level tests for the API endpoints."""
 
 import pytest
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.main import app, get_answer_generator
 from app.schemas import AIAnswer
+from app.services import ai_service, question_cache, usage_store
 from app.services.ai_service import AIProviderTimeoutError
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch, local_tmp_path):
+    monkeypatch.setenv("MOODLE_ASSISTANT_DATA_DIR", str(local_tmp_path / "app-data"))
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -20,6 +23,27 @@ def test_health_returns_ok(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_usage_statistics_endpoint_returns_only_aggregates(client: TestClient, monkeypatch, local_tmp_path) -> None:
+    monkeypatch.setenv("MOODLE_ASSISTANT_DATA_DIR", str(local_tmp_path / "app-data"))
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setattr(usage_store, "SESSION_ID", "test-session")
+
+    response = client.get("/api/usage")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model"] == "test-model"
+    assert payload["session"] == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "request_count": 0,
+        "estimated_cost_usd": None,
+    }
+    assert payload["all_time"] == payload["session"]
+    assert set(payload) == {"model", "session", "all_time"}
 
 
 def test_answer_returns_structured_result_and_legacy_fields(client: TestClient) -> None:
@@ -44,7 +68,116 @@ def test_answer_returns_structured_result_and_legacy_fields(client: TestClient) 
         "needs_more_context": False,
         "answer": "Париж",
         "message": "Це столиця Франції.",
+        "source": "ai",
     }
+
+
+def test_answer_cache_hit_preserves_contract_and_does_not_call_generator_twice(client: TestClient) -> None:
+    calls = []
+    expected = AIAnswer(
+        suggested_answer="Париж",
+        explanation="Це столиця Франції.",
+        confidence=0.95,
+        needs_more_context=False,
+    )
+
+    def generate(question: str, options: list[str]) -> AIAnswer:
+        calls.append((question, options))
+        return expected
+
+    app.dependency_overrides[get_answer_generator] = lambda: generate
+    payload = {"question": "Яка столиця Франції?", "options": ["Париж", "Рим"]}
+    first = client.post("/api/answer", json=payload)
+    second = client.post(
+        "/api/answer",
+        json={"question": " ЯКА   СТОЛИЦЯ Франції? ", "options": ["Рим", "Париж"]},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["source"] == "ai"
+    assert second.json()["source"] == "cache"
+    assert second.json()["suggested_answer"] == first.json()["suggested_answer"]
+    assert set(second.json()) == {
+        "suggested_answer", "explanation", "confidence", "needs_more_context",
+        "answer", "message", "source",
+    }
+    assert len(calls) == 1
+    assert client.get("/api/usage").json()["all_time"]["request_count"] == 0
+
+
+def test_force_refresh_calls_generator_even_when_cache_has_a_match(client: TestClient) -> None:
+    answers = iter([
+        AIAnswer(suggested_answer="A", explanation="First", confidence=0.6, needs_more_context=False),
+        AIAnswer(suggested_answer="A", explanation="Fresh", confidence=0.9, needs_more_context=False),
+    ])
+    calls = []
+
+    def generate(question: str, options: list[str]) -> AIAnswer:
+        calls.append((question, options))
+        return next(answers)
+
+    app.dependency_overrides[get_answer_generator] = lambda: generate
+    payload = {"question": "Question?", "options": ["A", "B"]}
+    assert client.post("/api/answer", json=payload).json()["source"] == "ai"
+
+    refreshed = client.post("/api/answer", json={**payload, "force_refresh": True})
+
+    assert refreshed.status_code == 200
+    assert refreshed.json()["source"] == "ai"
+    assert refreshed.json()["explanation"] == "Fresh"
+    assert len(calls) == 2
+
+
+def test_forced_refresh_records_provider_usage_once(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    question_cache._save(
+        "Question?", ["A", "B"],
+        AIAnswer(suggested_answer="A", explanation="Cached", confidence=0.5, needs_more_context=False),
+    )
+
+    provider_response = SimpleNamespace(
+        id="forced-refresh-response-id",
+        model="test-model",
+        usage=SimpleNamespace(
+            input_tokens=17,
+            output_tokens=5,
+            total_tokens=22,
+            input_tokens_details=SimpleNamespace(cached_tokens=0),
+        ),
+        output_parsed={
+            "suggested_answer": "B",
+            "explanation": "Fresh provider response.",
+            "confidence": 0.8,
+            "needs_more_context": False,
+        },
+    )
+
+    class FakeResponses:
+        def parse(self, **_kwargs):
+            return provider_response
+
+    class FakeClient:
+        responses = FakeResponses()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ai_service, "OpenAI", lambda **_kwargs: FakeClient())
+    app.dependency_overrides[get_answer_generator] = lambda: ai_service.generate_answer
+
+    response = client.post(
+        "/api/answer",
+        json={"question": "Question?", "options": ["A", "B"], "force_refresh": True},
+    )
+    usage = client.get("/api/usage").json()["all_time"]
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "ai"
+    assert response.json()["suggested_answer"] == "B"
+    assert usage["input_tokens"] == 17
+    assert usage["output_tokens"] == 5
+    assert usage["request_count"] == 1
 
 
 def test_answer_accepts_open_ended_question_without_options(client: TestClient) -> None:
@@ -64,6 +197,31 @@ def test_answer_accepts_open_ended_question_without_options(client: TestClient) 
 
     assert response.status_code == 200
     assert received == {"question": "Поясни фотосинтез", "options": []}
+
+
+def test_known_wrong_option_forces_ai_and_does_not_replace_general_cache(client: TestClient) -> None:
+    question_cache._save(
+        "Question?", ["Bad", "Good"],
+        AIAnswer(suggested_answer="Bad", explanation="Cached", confidence=0.4, needs_more_context=False),
+    )
+    calls = []
+
+    def generate(question: str, options: list[str], excluded: list[str]) -> AIAnswer:
+        calls.append((question, options, excluded))
+        return AIAnswer(suggested_answer="Good", explanation="Fresh constrained answer", confidence=0.7, needs_more_context=False)
+
+    app.dependency_overrides[get_answer_generator] = lambda: generate
+    response = client.post("/api/answer", json={
+        "question": "Question?", "options": ["Bad", "Good"], "excluded_options": ["Bad"],
+    })
+    normal_response = client.post("/api/answer", json={"question": "Question?", "options": ["Bad", "Good"]})
+
+    assert response.status_code == 200
+    assert response.json()["suggested_answer"] == "Good"
+    assert response.json()["source"] == "ai"
+    assert calls == [("Question?", ["Bad", "Good"], ["Bad"])]
+    assert normal_response.json()["source"] == "cache"
+    assert normal_response.json()["suggested_answer"] == "Bad"
 
 
 def test_answer_maps_service_error_to_safe_http_response(client: TestClient) -> None:
