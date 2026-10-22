@@ -113,7 +113,9 @@ def _compatible_response(row: sqlite3.Row, options: list[str]) -> AIAnswer | Non
     return answer
 
 
-def _read(question: str, options: list[str]) -> AIAnswer | None:
+def _read(
+    question: str, options: list[str], excluded_options: list[str] | None = None
+) -> AIAnswer | None:
     normalized = normalize_question(question)
     if not normalized:
         return None
@@ -128,6 +130,11 @@ def _read(question: str, options: list[str]) -> AIAnswer | None:
             return None
         result = _compatible_response(row, options)
         if result is None:
+            return None
+        excluded_keys = {normalize_question(option) for option in excluded_options or []}
+        if excluded_keys and normalize_question(result.suggested_answer) in excluded_keys:
+            # The old cache entry conflicts with a verified zero-score choice.
+            # Leave it untouched and let the caller obtain a fresh analysis.
             return None
         connection.execute(
             """UPDATE question_cache SET usage_count = usage_count + 1,
@@ -195,17 +202,32 @@ def get_answer_with_source(
     answer_generator: Callable[..., AIAnswer],
     force_refresh: bool = False,
     excluded_options: list[str] | None = None,
+    negative_feedback: dict[str, object] | None = None,
 ) -> tuple[AIAnswer, str]:
-    """Return an answer and its source; forced calls bypass lookup but still save safely."""
+    """Use a non-conflicting cache result or call AI with scoped feedback."""
     normalized = normalize_question(question)
     digest_prefix = hashlib.sha256(normalized.encode("utf-8")).digest()[:2]
     lock_index = int.from_bytes(digest_prefix, "big") % len(_QUESTION_LOCKS)
     lock = _QUESTION_LOCKS[lock_index]
     with lock:
-        exclusions = excluded_options or []
-        if not force_refresh and not exclusions:
+        feedback = dict(negative_feedback or {})
+        combined_exclusions = list(dict.fromkeys([
+            *(feedback.get("incorrect_options", []) or []),
+            *(excluded_options or []),
+        ]))
+        feedback["known_wrong_options"] = combined_exclusions
+        feedback["incorrect_combinations"] = feedback.get("incorrect_combinations", []) or []
+        feedback["unclassified_selections"] = feedback.get("unclassified_selections", []) or []
+        feedback["moodle_feedback"] = feedback.get("moodle_feedback", []) or []
+        constrained = bool(
+            combined_exclusions
+            or feedback["incorrect_combinations"]
+            or feedback["unclassified_selections"]
+            or feedback.get("has_negative_feedback")
+        )
+        if not force_refresh:
             try:
-                cached = _read(question, options)
+                cached = _read(question, options, combined_exclusions)
             except (sqlite3.Error, OSError):
                 # A database outage must not prevent the existing AI flow.
                 logger.warning("Question cache lookup failed; using the AI provider.")
@@ -213,14 +235,10 @@ def get_answer_with_source(
             if cached is not None:
                 return cached, "cache"
 
-        result = (
-            answer_generator(question, options, exclusions)
-            if exclusions
-            else answer_generator(question, options)
-        )
+        result = answer_generator(question, options, feedback) if constrained else answer_generator(question, options)
         # This response is bound to a specific past failure and option set. Do
         # not replace or create the general-purpose question cache entry.
-        if exclusions:
+        if constrained:
             return result, "ai"
         try:
             _save(question, options, result)

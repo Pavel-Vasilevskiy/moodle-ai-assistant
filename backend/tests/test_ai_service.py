@@ -8,6 +8,7 @@ from app import schemas
 from app.services import ai_service
 from app.services.ai_service import (
     AIConfigurationError,
+    AIAnswerConflictError,
     AIProviderRateLimitError,
     AIProviderTimeoutError,
     AIResponseError,
@@ -203,10 +204,15 @@ def test_generate_answer_supplies_known_wrong_option_to_model(monkeypatch) -> No
     })
     configure_fake_client(monkeypatch, response)
 
-    ai_service.generate_answer("Питання?", ["Неправильний", "Безпечний варіант"], ["Неправильний"])
+    ai_service.generate_answer("Питання?", ["Неправильний", "Безпечний варіант"], {
+        "known_wrong_options": ["Неправильний"],
+        "incorrect_combinations": [],
+        "moodle_feedback": ["Moodle: спроба отримала нуль."],
+    })
 
     assert '"known_wrong_options": ["Неправильний"]' in response.arguments["input"]
-    assert "Never suggest them" in response.arguments["instructions"]
+    assert '"moodle_feedback": ["Moodle: спроба отримала нуль."]' in response.arguments["input"]
+    assert "Never repeat a listed single-choice option" in response.arguments["instructions"]
 
 
 def test_generate_answer_rejects_model_suggestion_marked_known_wrong(monkeypatch) -> None:
@@ -218,7 +224,101 @@ def test_generate_answer_rejects_model_suggestion_marked_known_wrong(monkeypatch
     }))
 
     with pytest.raises(AIResponseError):
-        ai_service.generate_answer("Питання?", ["Неправильний", "Безпечний"], ["Неправильний"])
+        ai_service.generate_answer("Питання?", ["Неправильний", "Безпечний"], {
+            "known_wrong_options": ["Неправильний"],
+        })
+
+
+def test_generate_answer_retries_once_with_feedback_then_maps_normalized_option(monkeypatch):
+    class SequenceResponses:
+        def __init__(self):
+            self.calls = []
+            self.answers = ["A", "  b  "]
+
+        def parse(self, **kwargs):
+            self.calls.append(kwargs)
+            answer = self.answers.pop(0)
+            return SimpleNamespace(
+                id=f"retry-{len(self.calls)}",
+                model="test-model",
+                usage=SimpleNamespace(input_tokens=11, output_tokens=3, total_tokens=14),
+                output_parsed={
+                    "suggested_answer": answer,
+                    "explanation": "Пояснення.",
+                    "confidence": 0.7,
+                    "needs_more_context": False,
+                },
+            )
+
+    response = SequenceResponses()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    client = FakeClient(response)
+    monkeypatch.setattr(ai_service, "OpenAI", lambda **_kwargs: client)
+    recorded = []
+    monkeypatch.setattr(ai_service.usage_store, "record_response_usage", lambda item, model: recorded.append(item.id))
+
+    answer = ai_service.generate_answer("Question?", ["A", "B"], {
+        "known_wrong_options": ["A"],
+        "incorrect_combinations": [],
+        "unclassified_selections": [],
+        "moodle_feedback": ["0 / 1"],
+    })
+
+    assert answer.suggested_answer == "B"
+    assert len(response.calls) == 2
+    assert "retry_note" in response.calls[1]["input"]
+    assert "previous_conflicting_suggestion" in response.calls[1]["input"]
+    assert recorded == ["retry-1", "retry-2"]
+    assert client.closed
+
+
+def test_generate_answer_returns_controlled_conflict_after_one_retry(monkeypatch):
+    class AlwaysWrongResponses:
+        def __init__(self):
+            self.calls = 0
+
+        def parse(self, **_kwargs):
+            self.calls += 1
+            return SimpleNamespace(
+                id=f"wrong-{self.calls}", model="test-model", usage=None,
+                output_parsed={
+                    "suggested_answer": "A", "explanation": "reason",
+                    "confidence": 0.4, "needs_more_context": False,
+                },
+            )
+
+    response = AlwaysWrongResponses()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    client = FakeClient(response)
+    monkeypatch.setattr(ai_service, "OpenAI", lambda **_kwargs: client)
+    with pytest.raises(AIAnswerConflictError):
+        ai_service.generate_answer("Question?", ["A", "B"], {"known_wrong_options": ["A"]})
+    assert response.calls == 2
+    assert "0 балів" in AIAnswerConflictError.public_message
+    assert client.closed
+
+
+def test_zero_scored_checkbox_combination_does_not_block_each_member(monkeypatch):
+    response = FakeResponses(parsed={
+        "suggested_answer": "A",
+        "explanation": "One option is considered in context.",
+        "confidence": 0.6,
+        "needs_more_context": False,
+    })
+    configure_fake_client(monkeypatch, response)
+
+    result = ai_service.generate_answer("Choose all that apply", ["A", "B", "C"], {
+        "known_wrong_options": [],
+        "incorrect_combinations": [["A", "B"]],
+        "unclassified_selections": [],
+        "moodle_feedback": [],
+        "selection_mode": "multiple",
+    })
+
+    assert result.suggested_answer == "A"
+    assert '"incorrect_combinations": [["A", "B"]]' in response.arguments["input"]
 
 
 def test_generate_answer_maps_unknown_model_to_configuration_error(monkeypatch) -> None:

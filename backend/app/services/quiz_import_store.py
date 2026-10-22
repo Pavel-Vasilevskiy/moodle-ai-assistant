@@ -106,54 +106,111 @@ def _normalize_question(question: str) -> str:
     return normalize_question(question)
 
 
-def get_question_history(request: QuestionHistoryRequest) -> list[dict[str, object]]:
-    """Return prior zero-score warnings and only safe radio exclusions.
+def _negative_feedback_for_question(
+    connection: sqlite3.Connection,
+    question: str,
+    options: list[str],
+    selection_mode: str = "unknown",
+) -> dict[str, object]:
+    normalized = _normalize_question(question)
+    rows = connection.execute(
+        """SELECT q.import_id, q.options_json, q.selected_options_json, q.feedback
+           FROM quiz_import_questions AS q
+           WHERE q.normalized_question = ? AND q.grading_status = 'incorrect'
+           ORDER BY q.id""",
+        (normalized,),
+    ).fetchall()
+    wrong_options: set[str] = set()
+    incorrect_combinations: list[list[str]] = []
+    unclassified_selections: list[list[str]] = []
+    feedback_texts: list[str] = []
+    matching_attempts: set[int] = set()
+    current_option_keys = sorted(normalize_question(option) for option in options)
 
-    Excluding an option is safe only when an earlier incorrect attempt used one
-    radio choice and its complete option set exactly matches this question.
-    A zero-scored checkbox selection describes a combination, not each option.
-    """
+    def current_match(stored_text: str) -> str | None:
+        matches = [
+            option for option in options
+            if normalize_question(option) == normalize_question(stored_text)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    for row in rows:
+        try:
+            stored_options = json.loads(row["options_json"])
+            selected = json.loads(row["selected_options_json"])
+        except (TypeError, ValueError):
+            continue
+        stored_texts = [option.get("text", "") for option in stored_options]
+        if not current_option_keys or sorted(normalize_question(text) for text in stored_texts) != current_option_keys:
+            continue
+        matching_attempts.add(row["import_id"])
+        input_types = {option.get("input_type") for option in stored_options}
+        if row["feedback"] and row["feedback"] not in feedback_texts:
+            feedback_texts.append(row["feedback"][:2000])
+
+        # Unknown mode is backward-compatible: the imported HTML's consistent
+        # input types determine what can safely be inferred.
+        if input_types == {"radio"} and selection_mode in {"single", "unknown"}:
+            mapped = current_match(selected[0]) if len(selected) == 1 else None
+            if mapped is not None:
+                wrong_options.add(mapped)
+        elif input_types == {"checkbox"} and selection_mode in {"multiple", "unknown"}:
+            mapped_combination = [current_match(option) for option in selected]
+            if selected and all(option is not None for option in mapped_combination):
+                combination = sorted(mapped_combination, key=normalize_question)
+                if combination not in incorrect_combinations:
+                    incorrect_combinations.append(combination)
+        elif selection_mode in {"single", "multiple", "unknown"}:
+            mapped_selection = [current_match(option) for option in selected]
+            if selected and all(option is not None for option in mapped_selection):
+                selection = sorted(mapped_selection, key=normalize_question)
+                if selection not in unclassified_selections:
+                    unclassified_selections.append(selection)
+
+    return {
+        "had_previous_zero_score": bool(rows),
+        "has_negative_feedback": bool(matching_attempts),
+        "incorrect_options": sorted(wrong_options),
+        "incorrect_combinations": incorrect_combinations,
+        "unclassified_selections": unclassified_selections,
+        "moodle_feedback": feedback_texts,
+        "selection_mode": selection_mode,
+        "zero_score_attempts": len({row["import_id"] for row in rows}),
+    }
+
+
+def get_negative_feedback(
+    question: str, options: list[str], selection_mode: str = "unknown"
+) -> dict[str, object]:
+    """Read only exact-match zero-score feedback for this question and option set."""
+    init_db()
+    with _connect() as connection:
+        return _negative_feedback_for_question(connection, question, options, selection_mode)
+
+
+def get_question_history(request: QuestionHistoryRequest) -> list[dict[str, object]]:
+    """Return prior zero-score warnings and safe single-choice exclusions."""
     init_db()
     results: list[dict[str, object]] = []
     with _connect() as connection:
         for index, item in enumerate(request.questions):
-            normalized = _normalize_question(item.question)
-            rows = connection.execute(
-                """SELECT q.import_id, q.options_json, q.selected_options_json
-                   FROM quiz_import_questions AS q
-                   WHERE q.normalized_question = ? AND q.grading_status = 'incorrect'
-                   ORDER BY q.id""",
-                (normalized,),
-            ).fetchall()
-            exclusions: set[str] = set()
-            exact_options = sorted(item.options)
-            if item.selection_mode == "single" and exact_options:
-                for row in rows:
-                    try:
-                        stored_options = json.loads(row["options_json"])
-                        selected = json.loads(row["selected_options_json"])
-                    except (TypeError, ValueError):
-                        continue
-                    if (
-                        len(selected) == 1
-                        and all(option.get("input_type") == "radio" for option in stored_options)
-                        and sorted(option.get("text", "") for option in stored_options) == exact_options
-                        and selected[0] in item.options
-                        and item.options.count(selected[0]) == 1
-                    ):
-                        exclusions.add(selected[0])
+            feedback = _negative_feedback_for_question(
+                connection, item.question, item.options, item.selection_mode
+            )
+            exclusions = feedback["incorrect_options"]
             note = None
-            if rows and item.selection_mode in {"multiple", "mixed", "unknown"}:
+            if feedback["has_negative_feedback"] and item.selection_mode in {"multiple", "mixed", "unknown"}:
                 note = "У минулій спробі Moodle поставив 0 балів. Для checkbox це стосується комбінації, тому окремі варіанти не виключено."
-            elif rows and item.selection_mode == "single" and not exclusions:
+            elif feedback["has_negative_feedback"] and item.selection_mode == "single" and not exclusions:
                 note = "У минулій спробі Moodle поставив 0 балів, але варіант не можна безпечно зіставити з поточним набором."
-            elif rows and item.selection_mode == "open":
+            elif feedback["has_negative_feedback"] and item.selection_mode == "open":
                 note = "У минулій спробі Moodle поставив 0 балів за це питання."
             results.append({
                 "question_index": index,
-                "had_previous_zero_score": bool(rows),
-                "zero_score_attempts": len({row["import_id"] for row in rows}),
-                "excluded_options": sorted(exclusions),
+                "had_previous_zero_score": feedback["had_previous_zero_score"],
+                "zero_score_attempts": feedback["zero_score_attempts"],
+                "excluded_options": exclusions,
+                "incorrect_combinations": feedback["incorrect_combinations"],
                 "exclusion_note": note,
             })
     return results

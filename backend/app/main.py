@@ -19,7 +19,11 @@ from app.schemas import (
     UsageStatistics,
 )
 from app.services.ai_service import AIServiceError, generate_answer
-from app.services.quiz_import_store import get_question_history, save_attempt
+from app.services.quiz_import_store import (
+    get_negative_feedback,
+    get_question_history,
+    save_attempt,
+)
 from app.services.question_cache import get_answer_with_source
 from app.services.usage_store import get_statistics
 
@@ -83,11 +87,27 @@ def question_history(request: QuestionHistoryRequest) -> QuestionHistoryResponse
 @app.post("/api/answer", response_model=AnswerResponse)
 def answer(
     request: AnswerRequest,
-    answer_generator: Callable[[str, list[str]], AIAnswer] = Depends(
+    answer_generator: Callable[..., AIAnswer] = Depends(
         get_answer_generator
     ),
 ) -> AnswerResponse:
     """Return a structured AI suggestion while preserving the original keys."""
+    try:
+        negative_feedback = get_negative_feedback(
+            request.question, request.options, request.selection_mode
+        )
+    except (sqlite3.Error, OSError):
+        # A history database outage should not disable ordinary answer analysis.
+        logger.warning("Could not load negative Moodle feedback for this question.")
+        negative_feedback = {
+            "has_negative_feedback": False,
+            "incorrect_options": [],
+            "incorrect_combinations": [],
+            "unclassified_selections": [],
+            "moodle_feedback": [],
+            "selection_mode": request.selection_mode,
+        }
+
     try:
         result, source = get_answer_with_source(
             request.question,
@@ -95,6 +115,7 @@ def answer(
             answer_generator,
             force_refresh=request.force_refresh,
             excluded_options=request.excluded_options,
+            negative_feedback=negative_feedback,
         )
     except AIServiceError as exc:
         raise HTTPException(

@@ -1,5 +1,8 @@
 """HTTP-level tests for the API endpoints."""
 
+import json
+import sqlite3
+
 import pytest
 from types import SimpleNamespace
 from fastapi.testclient import TestClient
@@ -200,28 +203,153 @@ def test_answer_accepts_open_ended_question_without_options(client: TestClient) 
 
 
 def test_known_wrong_option_forces_ai_and_does_not_replace_general_cache(client: TestClient) -> None:
+    imported = client.post("/api/quiz-import", json={
+        "source_origin": "https://distance.kuk.edu.ua",
+        "attempt_identifier": "123",
+        "attempt_key": "course:attempt:123",
+        "questions": [{
+            "question": "Question?",
+            "options": [
+                {"text": "Bad", "selected": True, "mark": "unknown", "input_type": "radio"},
+                {"text": "Good", "selected": False, "mark": "unknown", "input_type": "radio"},
+            ],
+            "earned_score": "0",
+            "max_score": "1",
+        }],
+    })
+    assert imported.status_code == 200
     question_cache._save(
         "Question?", ["Bad", "Good"],
         AIAnswer(suggested_answer="Bad", explanation="Cached", confidence=0.4, needs_more_context=False),
     )
     calls = []
 
-    def generate(question: str, options: list[str], excluded: list[str]) -> AIAnswer:
-        calls.append((question, options, excluded))
+    def generate(question: str, options: list[str], feedback: dict[str, object]) -> AIAnswer:
+        calls.append((question, options, feedback))
         return AIAnswer(suggested_answer="Good", explanation="Fresh constrained answer", confidence=0.7, needs_more_context=False)
 
     app.dependency_overrides[get_answer_generator] = lambda: generate
     response = client.post("/api/answer", json={
-        "question": "Question?", "options": ["Bad", "Good"], "excluded_options": ["Bad"],
+        "question": "Question?", "options": ["Bad", "Good"], "selection_mode": "single",
     })
     normal_response = client.post("/api/answer", json={"question": "Question?", "options": ["Bad", "Good"]})
 
     assert response.status_code == 200
     assert response.json()["suggested_answer"] == "Good"
     assert response.json()["source"] == "ai"
-    assert calls == [("Question?", ["Bad", "Good"], ["Bad"])]
-    assert normal_response.json()["source"] == "cache"
-    assert normal_response.json()["suggested_answer"] == "Bad"
+    assert len(calls) == 2
+    assert calls[0][2]["known_wrong_options"] == ["Bad"]
+    assert "Bad" in calls[0][2]["known_wrong_options"]
+    assert normal_response.json()["source"] == "ai"
+    assert normal_response.json()["suggested_answer"] == "Good"
+    assert question_cache._read("Question?", ["Bad", "Good"]).suggested_answer == "Bad"
+
+
+def _import_wrong_radio_answer(client: TestClient, attempt: str = "retry-1") -> None:
+    response = client.post("/api/quiz-import", json={
+        "source_origin": "https://distance.kuk.edu.ua",
+        "attempt_identifier": attempt,
+        "attempt_key": f"course:{attempt}",
+        "questions": [{
+            "question": "Question?",
+            "options": [
+                {"text": "A", "selected": True, "mark": "unknown", "input_type": "radio"},
+                {"text": "B", "selected": False, "mark": "unknown", "input_type": "radio"},
+            ],
+            "earned_score": "0",
+            "max_score": "1",
+            "feedback": "Moodle gave zero points.",
+        }],
+    })
+    assert response.status_code == 200
+
+
+def _mock_openai_sequence(monkeypatch, answers: list[str]):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+
+    class Responses:
+        def __init__(self):
+            self.calls = []
+
+        def parse(self, **kwargs):
+            self.calls.append(kwargs)
+            answer = answers.pop(0)
+            call_number = len(self.calls)
+            return SimpleNamespace(
+                id=f"negative-feedback-{call_number}",
+                model="test-model",
+                usage=SimpleNamespace(input_tokens=10, output_tokens=4, total_tokens=14),
+                output_parsed={
+                    "suggested_answer": answer,
+                    "explanation": "Model explanation.",
+                    "confidence": 0.7,
+                    "needs_more_context": False,
+                },
+            )
+
+    class Client:
+        def __init__(self):
+            self.responses = Responses()
+
+        def close(self):
+            pass
+
+    fake = Client()
+    monkeypatch.setattr(ai_service, "OpenAI", lambda **_kwargs: fake)
+    app.dependency_overrides[get_answer_generator] = lambda: ai_service.generate_answer
+    return fake
+
+
+def test_real_answer_path_rejects_stale_cache_and_counts_bounded_retry(client, monkeypatch):
+    _import_wrong_radio_answer(client)
+    question_cache._save(
+        "Question?", ["A", "B"],
+        AIAnswer(suggested_answer="A", explanation="Old cached answer", confidence=0.4, needs_more_context=False),
+    )
+    fake = _mock_openai_sequence(monkeypatch, ["A", "B"])
+
+    response = client.post("/api/answer", json={
+        "question": "Question?", "options": ["B", "A"], "selection_mode": "single",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "ai"
+    assert response.json()["suggested_answer"] == "B"
+    assert len(fake.responses.calls) == 2
+    first_input = json.loads(fake.responses.calls[0]["input"])
+    assert first_input["negative_feedback"]["known_wrong_options"] == ["A"]
+    assert first_input["negative_feedback"]["moodle_feedback"] == ["Moodle gave zero points."]
+    assert "retry_note" in json.loads(fake.responses.calls[1]["input"])
+    usage = client.get("/api/usage").json()["all_time"]
+    assert usage["request_count"] == 2
+    assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (20, 8, 28)
+    # The context-specific answer is returned but the general cache entry stays untouched.
+    assert question_cache._read("Question?", ["A", "B"]).suggested_answer == "A"
+    with sqlite3.connect(usage_store.database_path()) as connection:
+        assert connection.execute("SELECT grading_status FROM quiz_import_questions").fetchone()[0] == "incorrect"
+
+
+def test_repeated_wrong_provider_answer_returns_controlled_conflict(client, monkeypatch):
+    _import_wrong_radio_answer(client, "retry-2")
+    question_cache._save(
+        "Question?", ["A", "B"],
+        AIAnswer(suggested_answer="A", explanation="Old cached answer", confidence=0.4, needs_more_context=False),
+    )
+    _mock_openai_sequence(monkeypatch, ["A", "A"])
+
+    response = client.post("/api/answer", json={
+        "question": "Question?", "options": ["A", "B"], "selection_mode": "single",
+    })
+
+    assert response.status_code == 502
+    assert "Moodle" in response.json()["detail"]
+    usage = client.get("/api/usage").json()["all_time"]
+    assert usage["request_count"] == 2
+    assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (20, 8, 28)
+    assert question_cache._read("Question?", ["A", "B"]).suggested_answer == "A"
+    with sqlite3.connect(usage_store.database_path()) as connection:
+        assert connection.execute("SELECT grading_status FROM quiz_import_questions").fetchone()[0] == "incorrect"
 
 
 def test_answer_maps_service_error_to_safe_http_response(client: TestClient) -> None:

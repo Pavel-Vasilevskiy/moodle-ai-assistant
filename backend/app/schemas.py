@@ -12,6 +12,7 @@ class AnswerRequest(BaseModel):
     # An empty list supports open-ended questions; existing clients can still send options.
     options: list[str] = Field(default_factory=list, max_length=20)
     force_refresh: bool = False
+    selection_mode: Literal["single", "multiple", "open", "mixed", "unknown"] = "unknown"
     # Context-specific exclusions from a previously zero-scored radio choice.
     excluded_options: list[str] = Field(default_factory=list, max_length=20)
 
@@ -167,6 +168,7 @@ class QuestionHistoryResult(BaseModel):
     had_previous_zero_score: bool
     zero_score_attempts: int = Field(ge=0)
     excluded_options: list[str] = Field(default_factory=list, max_length=100)
+    incorrect_combinations: list[list[str]] = Field(default_factory=list, max_length=100)
     exclusion_note: str | None = Field(default=None, max_length=300)
 
 

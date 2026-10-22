@@ -176,6 +176,7 @@ def test_history_marks_zero_score_and_excludes_only_matching_single_radio_option
         "had_previous_zero_score": True,
         "zero_score_attempts": 1,
         "excluded_options": ["Обраний варіант"],
+        "incorrect_combinations": [],
         "exclusion_note": None,
     }
 
@@ -194,6 +195,7 @@ def test_history_does_not_exclude_checkbox_combination_or_changed_option_set(cli
 
     assert results[0]["had_previous_zero_score"] is True
     assert results[0]["excluded_options"] == []
+    assert results[0]["incorrect_combinations"] == [["Обраний варіант"]]
     assert "комбінації" in results[0]["exclusion_note"]
     assert results[1]["excluded_options"] == []
 
